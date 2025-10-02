@@ -6,6 +6,7 @@ char* STRERROR_TABLE[] = {
     [NAXA_E_BOUNDS] =       "Out of bounds",
     [NAXA_E_EXHAUSTED] =    "Exhausted",
     [NAXA_E_TOOLONG] =      "String too long",
+    [NAXA_E_FILE] =         "File error",
 };
 
 char* naxa_strerror(int32_t error) {

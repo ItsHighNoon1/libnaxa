@@ -20,6 +20,7 @@ extern "C" {
 #define NAXA_E_BOUNDS 2
 #define NAXA_E_EXHAUSTED 3
 #define NAXA_E_TOOLONG 4
+#define NAXA_E_FILE 5
 
 /**
  * @brief Naxa version of strerror.

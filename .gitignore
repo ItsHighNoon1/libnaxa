@@ -6,3 +6,6 @@ obj/
 
 # My tooling
 .vscode/
+
+# Other
+latest.log

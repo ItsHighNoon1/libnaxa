@@ -1,2 +1,4 @@
 -Iinclude/
+-Isrc/include/
 -g
+-fPIC

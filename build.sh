@@ -40,7 +40,7 @@ wait
 # Link
 echo "Linking"
 mkdir -p lib
-$CC $(IFS=$'\n'; echo "${flags[*]}") -shared -o "lib/libnaxa.so.$VERSION" $(IFS=$'\n'; echo "${object_files[*]}")
+$CC -lglfw $(IFS=$'\n'; echo "${flags[*]}") -shared -o "lib/libnaxa.so.$VERSION" $(IFS=$'\n'; echo "${object_files[*]}")
 ln -nsf libnaxa.so.$VERSION lib/libnaxa.so
 
 echo "Done building library"

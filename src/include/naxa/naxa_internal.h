@@ -25,6 +25,7 @@ typedef struct {
     GLFWwindow* window;
 
     // Log context
+    int32_t log_level;
     int32_t log_ring_start;
     int32_t log_ring_cursor;
     int32_t log_ring_end;
@@ -37,6 +38,10 @@ typedef struct {
 } Naxa_Globals_t;
 
 extern Naxa_Globals_t naxa_globals;
+
+// Graphics functions
+int32_t init_gfx_context(int32_t window_width, int32_t window_height, char* window_name);
+int32_t render_all();
 
 // Internal logging utilities
 int32_t init_log_engine(char* log_file, int32_t stdout_logging);

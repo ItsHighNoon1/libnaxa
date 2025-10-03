@@ -12,6 +12,12 @@
 #define MAX_MESSAGE_LENGTH 1000
 
 static int32_t real_log_func(int32_t severity, char* string, int32_t len, int32_t is_engine) {
+    // If the severity is too low, ignore
+    if (severity < naxa_globals.log_level) {
+        return NAXA_E_SUCCESS;
+    }
+
+    // Build the message header
     char* owner_string = "NAXA";
     if (!is_engine) {
         // TODO user definable
@@ -42,7 +48,11 @@ static int32_t real_log_func(int32_t severity, char* string, int32_t len, int32_
     char message_header[40];
     int32_t header_len = snprintf(message_header, sizeof(message_header), "[%.8s/%-5s %19s]", // Max 36 chars
             owner_string, sev_string, time_string);
+
+    // Print the message
     if (naxa_globals.thread_flags & GLOBAL_THREADFLAGS_LOG) {
+        // If the logging thread is active, put the message on a ring buffer
+        // to be consumed by the logging thread later
         mtx_lock(&naxa_globals.log_mutex);
         int32_t max_len = sizeof(naxa_globals.log_ring) - naxa_globals.log_ring_cursor;
         int32_t actual_len = header_len + 1 + len + 1;
@@ -55,6 +65,7 @@ static int32_t real_log_func(int32_t severity, char* string, int32_t len, int32_
         mtx_unlock(&naxa_globals.log_mutex);
         cnd_broadcast(&naxa_globals.log_condition);
     } else {
+        // If the logging thread is not active, do the print ourselves
         if (naxa_globals.flags1 & GLOBAL_FLAGS1_STDOUT_LOGGING) {
             printf("%s %s\n", message_header, string);
         }
@@ -70,8 +81,10 @@ static int32_t real_log_func(int32_t severity, char* string, int32_t len, int32_
 
 static int log_thread_func(void* user) {
     while (!naxa_globals.log_thread_stop) {
+        // Wait on a signal that there is data. If 100ms passes we check anyways
         cnd_timedwait(&naxa_globals.log_condition, &naxa_globals.log_condition_mutex, &(struct timespec){ .tv_nsec = 100000000 });
         while (naxa_globals.log_ring_start != naxa_globals.log_ring_cursor) {
+            // There is new data, how long is it?
             int32_t saved_cursor = naxa_globals.log_ring_cursor;
             int32_t log_len = saved_cursor - naxa_globals.log_ring_start;
             if (log_len < 0) {
@@ -79,16 +92,20 @@ static int log_thread_func(void* user) {
             } else if (log_len == 0) {
                 continue;
             }
+
+            // Write it out
             if (naxa_globals.flags1 & GLOBAL_FLAGS1_STDOUT_LOGGING) {
                 fwrite(&naxa_globals.log_ring[naxa_globals.log_ring_start], log_len, 1, stdout);
             }
             if (naxa_globals.log_file != NULL) {
                 fwrite(&naxa_globals.log_ring[naxa_globals.log_ring_start], log_len, 1, naxa_globals.log_file);
             }
-            if (log_len > 0) {
-                naxa_globals.log_ring_start = saved_cursor;
-            } else {
+
+            if (saved_cursor < naxa_globals.log_ring_start) {
+                // If the cursor was before the start, the ring buffer wrapped
                 naxa_globals.log_ring_start = 0;
+            } else {
+                naxa_globals.log_ring_start = saved_cursor;
             }
         }
     }
@@ -101,15 +118,20 @@ int32_t init_log_engine(char* log_file, int32_t stdout_logging) {
     } else {
         naxa_globals.flags1 &= ~GLOBAL_FLAGS1_STDOUT_LOGGING;
     }
+
+    // If a log file was already open for some reason, close it first
     if (naxa_globals.log_file) {
         fclose(naxa_globals.log_file);
         naxa_globals.log_file = NULL;
     }
+
     naxa_globals.log_file = fopen(log_file, "w");
     if (naxa_globals.log_file == NULL) {
         report_error(NAXA_E_FILE);
         return NAXA_E_FILE;
     }
+
+    // Init logging thread
     naxa_globals.log_thread_stop = 0;
     mtx_init(&naxa_globals.log_mutex, mtx_plain);
     mtx_init(&naxa_globals.log_condition_mutex, mtx_plain);
@@ -124,8 +146,11 @@ int32_t init_log_engine(char* log_file, int32_t stdout_logging) {
 
 int32_t await_log_thread() {
     if (naxa_globals.thread_flags & GLOBAL_THREADFLAGS_LOG) {
+        // Tell the thread to stop and wait for it
         naxa_globals.log_thread_stop = 1;
         thrd_join(naxa_globals.thread_log, NULL);
+
+        // Make sure everyone knows the thread is gone
         memset(&naxa_globals.thread_log, 0, sizeof(thrd_t));
         naxa_globals.thread_flags &= ~GLOBAL_FLAGS1_STDOUT_LOGGING;
     }
@@ -150,6 +175,7 @@ extern int32_t naxa_logn(int32_t severity, char* string, int32_t n) {
 }
 
 extern int32_t naxa_logf(int32_t severity, char* format, ...) {
+    // Figure out how long of a buffer we need
     va_list argptr;
     va_start(argptr, format);
     int32_t desired_len = vsnprintf("", 0, format, argptr);
@@ -159,9 +185,13 @@ extern int32_t naxa_logf(int32_t severity, char* format, ...) {
         return NAXA_E_TOOLONG;
     }
     char* message_buffer = malloc(desired_len + 1);
+
+    // vsnprintf
     va_start(argptr, format);
     vsnprintf(message_buffer, 0, format, argptr);
     va_end(argptr);
+
+    // Delegate to logn
     int32_t rc = naxa_logn(severity, message_buffer, desired_len);
     free(message_buffer);
     return rc;

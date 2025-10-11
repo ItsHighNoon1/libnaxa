@@ -1,3 +1,4 @@
+#include "naxa/gfx.h"
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
@@ -10,7 +11,7 @@
 #include <naxa/naxa.h>
 #include <naxa/naxa_internal.h>
 
-Naxa_Globals_t naxa_globals;
+NaxaGlobals_t naxa_globals;
 
 static void handle_segfault(int signum) {
     // If this is our second segfault, exit immediately
@@ -23,9 +24,9 @@ static void handle_segfault(int signum) {
 
     // Force the log thread to exit 
     await_log_thread();
-    if (naxa_globals.log_file) {
-        fclose(naxa_globals.log_file);
-    }
+
+    // Close log file and exit
+    teardown_log_engine();
     exit(1);
 }
 
@@ -43,7 +44,7 @@ extern int32_t naxa_init() {
     if ((rc = init_log_engine("latest.log", NAXA_TRUE)) != NAXA_E_SUCCESS) {
         return rc;
     }
-    naxa_globals.log_level = NAXA_SEVERITY_INFO;
+    set_log_severity(NAXA_SEVERITY_INFO);
     internal_log("Started Naxa");
 
     // Set up the graphics context
@@ -58,8 +59,15 @@ extern int32_t naxa_init() {
 extern int32_t naxa_run() {
     internal_log("Entered game loop");
 
+    NaxaEntity_t entity;
+    naxa_load_model(&entity.model, "res/anaxa/model.pmx");
+    entity.position[0] = 0.0f;
+    entity.position[1] = 0.0f;
+    entity.position[2] = 0.0f;
+
     while (!glfwWindowShouldClose(naxa_globals.window)) {
         render_all();
+        render_enqueue(&entity);
         glfwPollEvents();
     }
 

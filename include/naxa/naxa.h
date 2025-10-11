@@ -13,7 +13,10 @@
 extern "C" {
 #endif
 
+#include <stdint.h>
+
 #include <naxa/err.h>
+#include <naxa/gfx.h>
 #include <naxa/log.h>
 
 #define NAXA_FALSE 0

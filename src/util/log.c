@@ -11,9 +11,20 @@
 
 #define MAX_MESSAGE_LENGTH 1000
 
+int32_t log_level;
+int32_t log_ring_start;
+int32_t log_ring_cursor;
+int32_t log_ring_end;
+int32_t log_thread_stop;
+mtx_t log_mutex;
+mtx_t log_condition_mutex;
+cnd_t log_condition;
+FILE* log_file;
+char log_ring[2048];
+
 static int32_t real_log_func(int32_t severity, char* string, int32_t len, int32_t is_engine) {
     // If the severity is too low, ignore
-    if (severity < naxa_globals.log_level) {
+    if (severity < log_level) {
         return NAXA_E_SUCCESS;
     }
 
@@ -53,66 +64,66 @@ static int32_t real_log_func(int32_t severity, char* string, int32_t len, int32_
     if (naxa_globals.thread_flags & GLOBAL_THREADFLAGS_LOG) {
         // If the logging thread is active, put the message on a ring buffer
         // to be consumed by the logging thread later
-        mtx_lock(&naxa_globals.log_mutex);
-        int32_t max_len = sizeof(naxa_globals.log_ring) - naxa_globals.log_ring_cursor;
+        mtx_lock(&log_mutex);
+        int32_t max_len = sizeof(log_ring) - log_ring_cursor;
         int32_t actual_len = header_len + 1 + len + 1;
         if (actual_len > max_len) {
-            naxa_globals.log_ring_end = naxa_globals.log_ring_cursor;
-            naxa_globals.log_ring_cursor = 0;
-            max_len = sizeof(naxa_globals.log_ring) - naxa_globals.log_ring_cursor;
+            log_ring_end = log_ring_cursor;
+            log_ring_cursor = 0;
+            max_len = sizeof(log_ring) - log_ring_cursor;
         }
-        naxa_globals.log_ring_cursor += snprintf(&naxa_globals.log_ring[naxa_globals.log_ring_cursor], max_len, "%s %s\n", message_header, string);
-        mtx_unlock(&naxa_globals.log_mutex);
-        cnd_broadcast(&naxa_globals.log_condition);
+        log_ring_cursor += snprintf(&log_ring[log_ring_cursor], max_len, "%s %s\n", message_header, string);
+        mtx_unlock(&log_mutex);
+        cnd_broadcast(&log_condition);
     } else {
         // If the logging thread is not active, do the print ourselves
         if (naxa_globals.flags1 & GLOBAL_FLAGS1_STDOUT_LOGGING) {
             printf("%s %s\n", message_header, string);
         }
-        if (naxa_globals.log_file != NULL) {
-            fwrite(message_header, header_len, 1, naxa_globals.log_file);
-            fwrite(" ", 1, 1, naxa_globals.log_file);
-            fwrite(string, len, 1, naxa_globals.log_file);
-            fwrite("\n", 1, 1, naxa_globals.log_file);
+        if (log_file != NULL) {
+            fwrite(message_header, header_len, 1, log_file);
+            fwrite(" ", 1, 1, log_file);
+            fwrite(string, len, 1, log_file);
+            fwrite("\n", 1, 1, log_file);
         }
     }
     return NAXA_E_SUCCESS;
 }
 
 static int log_thread_func(void* user) {
-    while (!naxa_globals.log_thread_stop) {
+    while (!log_thread_stop) {
         // Wait on a signal that there is data. If 100ms passes we check anyways
-        cnd_timedwait(&naxa_globals.log_condition, &naxa_globals.log_condition_mutex, &(struct timespec){ .tv_nsec = 100000000 });
-        while (naxa_globals.log_ring_start != naxa_globals.log_ring_cursor) {
+        cnd_timedwait(&log_condition, &log_condition_mutex, &(struct timespec){ .tv_nsec = 100000000 });
+        while (log_ring_start != log_ring_cursor) {
             // There is new data, how long is it?
-            int32_t saved_cursor = naxa_globals.log_ring_cursor;
-            int32_t log_len = saved_cursor - naxa_globals.log_ring_start;
+            int32_t saved_cursor = log_ring_cursor;
+            int32_t log_len = saved_cursor - log_ring_start;
             if (log_len < 0) {
-                log_len = naxa_globals.log_ring_end - naxa_globals.log_ring_start;
+                log_len = log_ring_end - log_ring_start;
             } else if (log_len == 0) {
                 continue;
             }
 
             // Write it out
             if (naxa_globals.flags1 & GLOBAL_FLAGS1_STDOUT_LOGGING) {
-                fwrite(&naxa_globals.log_ring[naxa_globals.log_ring_start], log_len, 1, stdout);
+                fwrite(&log_ring[log_ring_start], log_len, 1, stdout);
             }
-            if (naxa_globals.log_file != NULL) {
-                fwrite(&naxa_globals.log_ring[naxa_globals.log_ring_start], log_len, 1, naxa_globals.log_file);
+            if (log_file != NULL) {
+                fwrite(&log_ring[log_ring_start], log_len, 1, log_file);
             }
 
-            if (saved_cursor < naxa_globals.log_ring_start) {
+            if (saved_cursor < log_ring_start) {
                 // If the cursor was before the start, the ring buffer wrapped
-                naxa_globals.log_ring_start = 0;
+                log_ring_start = 0;
             } else {
-                naxa_globals.log_ring_start = saved_cursor;
+                log_ring_start = saved_cursor;
             }
         }
     }
     return 0;
 }
 
-int32_t init_log_engine(char* log_file, int32_t stdout_logging) {
+int32_t init_log_engine(char* file_path, int32_t stdout_logging) {
     if (stdout_logging) {
         naxa_globals.flags1 |= GLOBAL_FLAGS1_STDOUT_LOGGING;
     } else {
@@ -120,22 +131,22 @@ int32_t init_log_engine(char* log_file, int32_t stdout_logging) {
     }
 
     // If a log file was already open for some reason, close it first
-    if (naxa_globals.log_file) {
-        fclose(naxa_globals.log_file);
-        naxa_globals.log_file = NULL;
+    if (log_file) {
+        fclose(log_file);
+        log_file = NULL;
     }
 
-    naxa_globals.log_file = fopen(log_file, "w");
-    if (naxa_globals.log_file == NULL) {
+    log_file = fopen(file_path, "w");
+    if (log_file == NULL) {
         report_error(NAXA_E_FILE);
         return NAXA_E_FILE;
     }
 
     // Init logging thread
-    naxa_globals.log_thread_stop = 0;
-    mtx_init(&naxa_globals.log_mutex, mtx_plain);
-    mtx_init(&naxa_globals.log_condition_mutex, mtx_plain);
-    cnd_init(&naxa_globals.log_condition);
+    log_thread_stop = 0;
+    mtx_init(&log_mutex, mtx_plain);
+    mtx_init(&log_condition_mutex, mtx_plain);
+    cnd_init(&log_condition);
     if (thrd_create(&naxa_globals.thread_log, log_thread_func, NULL) != thrd_success) {
         report_error(NAXA_E_INTERNAL);
         return NAXA_E_INTERNAL;
@@ -147,7 +158,7 @@ int32_t init_log_engine(char* log_file, int32_t stdout_logging) {
 int32_t await_log_thread() {
     if (naxa_globals.thread_flags & GLOBAL_THREADFLAGS_LOG) {
         // Tell the thread to stop and wait for it
-        naxa_globals.log_thread_stop = 1;
+        log_thread_stop = 1;
         thrd_join(naxa_globals.thread_log, NULL);
 
         // Make sure everyone knows the thread is gone
@@ -159,9 +170,9 @@ int32_t await_log_thread() {
 
 int32_t teardown_log_engine() {
     await_log_thread();
-    if (naxa_globals.log_file) {
-        fclose(naxa_globals.log_file);
-        naxa_globals.log_file = NULL;
+    if (log_file) {
+        fclose(log_file);
+        log_file = NULL;
     }
     return NAXA_E_SUCCESS;
 }
@@ -221,4 +232,8 @@ int32_t internal_logf(int32_t severity, char* format, ...) {
     int32_t rc = internal_logn(severity, message_buffer, desired_len);
     free(message_buffer);
     return rc;
+}
+
+void set_log_severity(int32_t severity) {
+    log_level = severity;
 }

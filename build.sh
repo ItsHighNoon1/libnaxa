@@ -40,7 +40,7 @@ wait
 # Link
 echo "Linking"
 mkdir -p lib
-$CC -lglfw $(IFS=$'\n'; echo "${flags[*]}") -shared -o "lib/libnaxa.so.$VERSION" $(IFS=$'\n'; echo "${object_files[*]}")
+$CC -lassimp -lglfw $(IFS=$'\n'; echo "${flags[*]}") -shared -o "lib/libnaxa.so.$VERSION" $(IFS=$'\n'; echo "${object_files[*]}")
 ln -nsf libnaxa.so.$VERSION lib/libnaxa.so
 
 echo "Done building library"
@@ -61,5 +61,4 @@ for source in "${source_files[@]}"; do
     $CC -c -o "$object" "test/src/$source" $(IFS=$'\n'; echo "${flags[*]}") &
 done
 wait
-mkdir -p bin
-$CC -Llib -lnaxa $(IFS=$'\n'; echo "${flags[*]}") -o "bin/test" $(IFS=$'\n'; echo "${object_files[*]}")
+$CC -Llib -lnaxa $(IFS=$'\n'; echo "${flags[*]}") -o "test/test" $(IFS=$'\n'; echo "${object_files[*]}")

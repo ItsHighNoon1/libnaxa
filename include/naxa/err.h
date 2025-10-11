@@ -21,6 +21,7 @@ extern "C" {
 #define NAXA_E_EXHAUSTED 3
 #define NAXA_E_TOOLONG 4
 #define NAXA_E_FILE 5
+#define NAXA_E_NULLPTR 6
 
 /**
  * @brief Naxa version of strerror.
@@ -28,7 +29,7 @@ extern "C" {
  * @param error The error code returned from Naxa.
  * @return char* A text representation of the given error code.
  */
-extern char* naxa_strerror(int32_t error);
+extern const char* naxa_strerror(int32_t error);
 
 #ifdef __cplusplus
 }

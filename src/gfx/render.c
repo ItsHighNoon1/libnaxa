@@ -17,7 +17,10 @@ int32_t render_all() {
 
 int32_t render_enqueue(NaxaEntity_t* entity) {
     glBindVertexArray(entity->model->vao);
-    glDrawElements(GL_TRIANGLES, entity->model->vertex_count, GL_UNSIGNED_INT, (void*)0);
+    for (int32_t i = 0; i < entity->model->submodel_count; i++) {
+        NaxaSubmodel_t* submodel = &entity->model->submodels[i];
+        glDrawElements(GL_TRIANGLES, submodel->vertex_count, GL_UNSIGNED_INT, (void*)(int64_t)submodel->offset);
+    }
     return NAXA_E_SUCCESS;
 }
 

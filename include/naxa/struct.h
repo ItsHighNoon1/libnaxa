@@ -18,11 +18,18 @@ extern "C" {
 #include <cglm/cglm.h>
 
 typedef struct {
+    int32_t vertex_count;
+    int32_t offset;
+    uint32_t diffuse;
+} NaxaSubmodel_t;
+
+typedef struct {
     uint32_t vao;
     uint32_t vbo;
     uint32_t ebo;
-    int32_t vertex_count;
-    int32_t diffuse;
+    int32_t submodel_count;
+    NaxaSubmodel_t* submodels;
+    // skeleton_t
 } NaxaModel_t;
 
 typedef struct {

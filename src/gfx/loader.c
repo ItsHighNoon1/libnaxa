@@ -58,16 +58,6 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
         return NAXA_E_FILE;
     }
 
-    // In case of multiple meshes, find the biggest one
-    struct aiMesh* mainMesh = NULL;
-    int32_t mainMeshFaces = 0;
-    for (int32_t i = 0; i < scene->mNumMeshes; i++) {
-        if (scene->mMeshes[i]->mNumVertices > mainMeshFaces) {
-            mainMesh = scene->mMeshes[i];
-            mainMeshFaces = mainMesh->mNumFaces;
-        }
-    }
-
     // Either no meshes or a mesh with 0 triangles
     if (scene->mNumMeshes <= 0) {
         free(directory);
@@ -76,18 +66,13 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
         return NAXA_E_FILE;
     }
 
-    internal_logf(NAXA_SEVERITY_INFO, "Loading model %s (%d tris, skipped %d meshes)",
-        path, mainMeshFaces, scene->mNumMeshes - 1);
-
     // Allocate OpenGL objects
     uint32_t vao = 0;
     uint32_t vbo = 0;
     uint32_t ebo = 0;
-    uint32_t texture;
     glGenVertexArrays(1, &vao);
     glGenBuffers(1, &vbo);
     glGenBuffers(1, &ebo);
-    glGenTextures(1, &texture);
     if (vao == 0) {
         free(directory);
         aiReleaseImport(scene);
@@ -106,85 +91,120 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
         report_error(NAXA_E_INTERNAL);
         return NAXA_E_INTERNAL;
     }
-    if (texture == 0) {
-        free(directory);
-        aiReleaseImport(scene);
-        report_error(NAXA_E_INTERNAL);
-        return NAXA_E_INTERNAL;
-    }
 
-    // Attempt to load the texture before we start doing OpenGL stuff
-    struct aiMaterial* material = scene->mMaterials[mainMesh->mMaterialIndex];
-    struct aiString texture_path;
-    aiReturn ai_rc = aiGetMaterialTexture(material, aiTextureType_DIFFUSE, 0, &texture_path, NULL, NULL, NULL, NULL, NULL, NULL);
-    if (ai_rc != aiReturn_SUCCESS) {
-        free(directory);
-        aiReleaseImport(scene);
-        report_error(NAXA_E_INTERNAL);
-        return NAXA_E_INTERNAL;
+    // Figure out the total number of vertices and faces
+    int32_t total_vertices = 0;
+    int32_t total_faces = 0;
+    for (int32_t i = 0; i < scene->mNumMeshes; i++) {
+        total_vertices += scene->mMeshes[i]->mNumVertices;
+        total_faces += scene->mMeshes[i]->mNumFaces;
     }
-    int32_t texture_width;
-    int32_t texture_height;
-    int32_t texture_channels;
-    int32_t full_path_len = directory_len + texture_path.length;
-    char* full_path = malloc(full_path_len + 1);
-    memcpy(full_path, directory, directory_len);
-    memcpy(full_path + directory_len, texture_path.data, texture_path.length);
-    full_path[full_path_len] = 0;
-    stbi_uc* texture_data = stbi_load(full_path, &texture_width, &texture_height, &texture_channels, 0);
-    
-    if (texture_data == NULL) {
-        internal_logf(NAXA_SEVERITY_ERROR, "Failed to load texture %s for model %s", full_path, path);
+    internal_logf(NAXA_SEVERITY_INFO, "Loading model %s (%d meshes, %d tris)",
+        path, scene->mNumMeshes, total_faces);
+
+    // Load all submodels
+    NaxaSubmodel_t* submodels = malloc(sizeof(NaxaSubmodel_t) * scene->mNumMeshes);
+    int32_t vertex_buffer_size = total_vertices * sizeof(VertexData_t);
+    int32_t element_buffer_size = total_faces * 3 * sizeof(int32_t);
+    int32_t vertex_offset = 0;
+    int32_t element_offset = 0;
+    VertexData_t* vertices = malloc(vertex_buffer_size);
+    uint32_t* elements = malloc(element_buffer_size);
+    for (int32_t mesh_idx = 0; mesh_idx < scene->mNumMeshes; mesh_idx++) {
+        // Copy vertex and index data into the big buffers
+        for (int32_t v_idx = 0; v_idx < scene->mMeshes[mesh_idx]->mNumVertices; v_idx++) {
+            vertices[v_idx + vertex_offset].position[0] = scene->mMeshes[mesh_idx]->mVertices[v_idx].x;
+            vertices[v_idx + vertex_offset].position[1] = scene->mMeshes[mesh_idx]->mVertices[v_idx].y;
+            vertices[v_idx + vertex_offset].position[2] = scene->mMeshes[mesh_idx]->mVertices[v_idx].z;
+            vertices[v_idx + vertex_offset].texture[0] = scene->mMeshes[mesh_idx]->mTextureCoords[0][v_idx].x;
+            vertices[v_idx + vertex_offset].texture[1] = scene->mMeshes[mesh_idx]->mTextureCoords[0][v_idx].y;
+            vertices[v_idx + vertex_offset].normal[0] = scene->mMeshes[mesh_idx]->mNormals[v_idx].x;
+            vertices[v_idx + vertex_offset].normal[1] = scene->mMeshes[mesh_idx]->mNormals[v_idx].y;
+            vertices[v_idx + vertex_offset].normal[2] = scene->mMeshes[mesh_idx]->mNormals[v_idx].z;
+        }
+        for (int32_t e_idx = 0; e_idx < scene->mMeshes[mesh_idx]->mNumFaces; e_idx++) {
+            elements[e_idx * 3 + 0 + element_offset] = scene->mMeshes[mesh_idx]->mFaces[e_idx].mIndices[0] + vertex_offset;
+            elements[e_idx * 3 + 1 + element_offset] = scene->mMeshes[mesh_idx]->mFaces[e_idx].mIndices[1] + vertex_offset;
+            elements[e_idx * 3 + 2 + element_offset] = scene->mMeshes[mesh_idx]->mFaces[e_idx].mIndices[2] + vertex_offset;
+        }
+        submodels[mesh_idx].vertex_count = scene->mMeshes[mesh_idx]->mNumFaces * 3;
+        submodels[mesh_idx].offset = element_offset * sizeof(uint32_t);
+        vertex_offset += scene->mMeshes[mesh_idx]->mNumVertices;
+        element_offset += scene->mMeshes[mesh_idx]->mNumFaces * 3;
+
+        // Load the texture for this model
+        struct aiMaterial* material = scene->mMaterials[scene->mMeshes[mesh_idx]->mMaterialIndex];
+        struct aiString texture_path;
+        aiReturn ai_rc = aiGetMaterialTexture(material, aiTextureType_DIFFUSE, 0, &texture_path, NULL, NULL, NULL, NULL, NULL, NULL);
+        if (ai_rc != aiReturn_SUCCESS) {
+            free(directory);
+            aiReleaseImport(scene);
+            report_error(NAXA_E_INTERNAL);
+            return NAXA_E_INTERNAL;
+        }
+        int32_t texture_width;
+        int32_t texture_height;
+        int32_t texture_channels;
+        int32_t full_path_len = directory_len + texture_path.length;
+        char* full_path = malloc(full_path_len + 1);
+        memcpy(full_path, directory, directory_len);
+        memcpy(full_path + directory_len, texture_path.data, texture_path.length);
+        full_path[full_path_len] = 0;
+        internal_logf(NAXA_SEVERITY_INFO, "Loading texture %s for model %s", full_path, path);
+        stbi_uc* texture_data = stbi_load(full_path, &texture_width, &texture_height, &texture_channels, 0);
+        
+        if (texture_data == NULL) {
+            internal_logf(NAXA_SEVERITY_ERROR, "Failed to load texture %s for model %s", full_path, path);
+            free(submodels);
+            free(vertices);
+            free(elements);
+            free(full_path);
+            free(directory);
+            aiReleaseImport(scene);
+            report_error(NAXA_E_FILE);
+            return NAXA_E_FILE;
+        }
         free(full_path);
-        free(directory);
-        aiReleaseImport(scene);
-        report_error(NAXA_E_FILE);
-        return NAXA_E_FILE;
-    }
-    free(full_path);
-    glBindTexture(GL_TEXTURE_2D, texture);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-    switch (texture_channels) {
-        case 3:
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, texture_width, texture_height, 0, GL_RGB, GL_UNSIGNED_BYTE, texture_data);
-            break;
-        case 4:
-            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texture_width, texture_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, texture_data);
-            break;
-        default:
+        uint32_t texture = 0;
+        glGenTextures(1, &texture);
+        if (texture == 0) {
+            free(submodels);
+            free(vertices);
+            free(elements);
             free(directory);
             aiReleaseImport(scene);
             stbi_image_free(texture_data);
             report_error(NAXA_E_INTERNAL);
             return NAXA_E_INTERNAL;
+        }
+        glBindTexture(GL_TEXTURE_2D, texture);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        switch (texture_channels) {
+            case 3:
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, texture_width, texture_height, 0, GL_RGB, GL_UNSIGNED_BYTE, texture_data);
+                break;
+            case 4:
+                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texture_width, texture_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, texture_data);
+                break;
+            default:
+                free(submodels);
+                free(vertices);
+                free(elements);
+                free(directory);
+                aiReleaseImport(scene);
+                stbi_image_free(texture_data);
+                report_error(NAXA_E_INTERNAL);
+                return NAXA_E_INTERNAL;
+        }
+        stbi_image_free(texture_data);
+        submodels[mesh_idx].diffuse = texture;
     }
-    stbi_image_free(texture_data);
     free(directory);
 
     // Load vertex data into VAO
-    // TODO decide if malloc is fine
-    int32_t vertex_buffer_size = mainMesh->mNumVertices * sizeof(VertexData_t);
-    VertexData_t* vertices = malloc(vertex_buffer_size);
-    for (int32_t i = 0; i < mainMesh->mNumVertices; i++) {
-        vertices[i].position[0] = mainMesh->mVertices[i].x;
-        vertices[i].position[1] = mainMesh->mVertices[i].y;
-        vertices[i].position[2] = mainMesh->mVertices[i].z;
-        vertices[i].texture[0] = mainMesh->mTextureCoords[0][i].x;
-        vertices[i].texture[1] = mainMesh->mTextureCoords[0][i].y;
-        vertices[i].normal[0] = mainMesh->mNormals[i].x;
-        vertices[i].normal[1] = mainMesh->mNormals[i].y;
-        vertices[i].normal[2] = mainMesh->mNormals[i].z;
-    }
-    int32_t element_buffer_size = mainMesh->mNumFaces * 3 * sizeof(VertexData_t);
-    uint32_t* elements = malloc(element_buffer_size);
-    for (int32_t i = 0; i < mainMesh->mNumFaces; i++) {
-        elements[i * 3 + 0] = mainMesh->mFaces[i].mIndices[0];
-        elements[i * 3 + 1] = mainMesh->mFaces[i].mIndices[1];
-        elements[i * 3 + 2] = mainMesh->mFaces[i].mIndices[2];
-    }
     glBindVertexArray(vao);
     glBindBuffer(GL_ARRAY_BUFFER, vbo);
     glBufferData(GL_ARRAY_BUFFER, vertex_buffer_size, vertices, GL_STATIC_DRAW);
@@ -199,7 +219,6 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
     glBindVertexArray(0);
     free(vertices);
     free(elements);
-    aiReleaseImport(scene);
 
     // We set everything up in OpenGL, wrap the handles up in an object
     // TODO ok this should definitely be allocated somewhere real
@@ -207,9 +226,10 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
     model->vao = vao;
     model->vbo = vbo;
     model->ebo = ebo;
-    model->vertex_count = mainMesh->mNumFaces * 3;
-    model->diffuse = texture;
+    model->submodel_count = scene->mNumMeshes;
+    model->submodels = submodels;
     *dest = model;
+    aiReleaseImport(scene);
     return NAXA_E_SUCCESS;
 }
 
@@ -220,6 +240,10 @@ int32_t naxa_free_model(NaxaModel_t* model) {
     glDeleteVertexArrays(1, &model->vao);
     glDeleteBuffers(1, &model->vbo);
     glDeleteBuffers(1, &model->ebo);
+    for (int32_t i = 0; i < model->submodel_count; i++) {
+        glDeleteTextures(1, &model->submodels[i].diffuse);
+    }
+    free(model->submodels);
     free(model);
     return NAXA_E_SUCCESS;
 }

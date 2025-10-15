@@ -53,6 +53,9 @@ extern int32_t naxa_init() {
         return rc;
     }
 
+    // Set up OpenGL loader
+    init_loader_caches();
+
     return NAXA_E_SUCCESS;
 }
 
@@ -70,6 +73,8 @@ extern int32_t naxa_run() {
         render_enqueue(&entity);
         glfwPollEvents();
     }
+
+    naxa_free_model(entity.model);
 
     return NAXA_E_SUCCESS;
 }

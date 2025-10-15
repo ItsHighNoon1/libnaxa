@@ -17,18 +17,28 @@ extern "C" {
 
 #include <cglm/cglm.h>
 
+typedef struct NaxaTexture {
+    uint32_t texture;
+    int32_t refs;
+    char* path;
+    struct NaxaTexture* next;
+} NaxaTexture_t;
+
 typedef struct {
     int32_t vertex_count;
     int32_t offset;
-    uint32_t diffuse;
+    NaxaTexture_t* diffuse;
 } NaxaSubmodel_t;
 
-typedef struct {
+typedef struct NaxaModel {
     uint32_t vao;
     uint32_t vbo;
     uint32_t ebo;
     int32_t submodel_count;
     NaxaSubmodel_t* submodels;
+    int32_t refs;
+    char* path;
+    struct NaxaModel* next;    
     // skeleton_t
 } NaxaModel_t;
 

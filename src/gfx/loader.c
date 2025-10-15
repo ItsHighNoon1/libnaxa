@@ -14,11 +14,161 @@
 #include <naxa/struct.h>
 #include <naxa/naxa_internal.h>
 
+#define MODEL_CACHE_SIZE 512
+#define TEXTURE_CACHE_SIZE 512
+#define MODEL_CACHE_HASH_SIZE 16
+#define TEXTURE_CACHE_HASH_SIZE 16
+
 typedef struct {
     vec3 position;
     vec2 texture;
     vec3 normal;
 } VertexData_t;
+
+NaxaModel_t* model_cache_next;
+NaxaModel_t model_cache[MODEL_CACHE_SIZE];
+NaxaModel_t* model_cache_hash_map[MODEL_CACHE_HASH_SIZE];
+NaxaTexture_t* texture_cache_next;
+NaxaTexture_t texture_cache[TEXTURE_CACHE_SIZE];
+NaxaTexture_t* texture_cache_hash_map[TEXTURE_CACHE_HASH_SIZE];
+
+int32_t init_loader_caches() {
+    memset(model_cache, 0, sizeof(model_cache));
+    memset(model_cache_hash_map, 0, sizeof(model_cache_hash_map));
+    for (int32_t i = 0; i < MODEL_CACHE_SIZE - 1; i++) {
+        model_cache[i].next = &model_cache[i + 1];
+    }
+    model_cache[MODEL_CACHE_SIZE - 1].next = NULL;
+    model_cache_next = &model_cache[0];
+    memset(texture_cache, 0, sizeof(texture_cache));
+    memset(texture_cache_hash_map, 0, sizeof(texture_cache_hash_map));
+    for (int32_t i = 0; i < TEXTURE_CACHE_SIZE - 1; i++) {
+        texture_cache[i].next = &texture_cache[i + 1];
+    }
+    texture_cache[TEXTURE_CACHE_SIZE - 1].next = NULL;
+    texture_cache_next = &texture_cache[0];
+    return NAXA_E_SUCCESS;
+}
+
+int32_t naxa_load_texture(NaxaTexture_t** dest, char* path) {
+    if (dest == NULL || path == NULL) {
+        report_error(NAXA_E_NULLPTR);
+        return NAXA_E_NULLPTR;
+    }
+    *dest = NULL;
+
+    // Check if this is already in the hash table
+    int32_t hash_bucket = hash_code(path) % TEXTURE_CACHE_HASH_SIZE;
+    NaxaTexture_t* current = texture_cache_hash_map[hash_bucket];
+    while (current) {
+        if (strcmp(path, current->path) == 0) {
+            // We found our texture
+            internal_logf(NAXA_SEVERITY_TRACE, "Found texture %s in texture cache", path);
+            current->refs++;
+            *dest = current;
+            return NAXA_E_SUCCESS;
+        }
+        current = current->next;
+    }
+
+    // Do the load
+    int32_t width;
+    int32_t height;
+    int32_t channels;
+    stbi_uc* texture_data = stbi_load(path, &width, &height, &channels, 0);
+    if (texture_data == NULL) {
+             report_error(NAXA_E_FILE);
+        return NAXA_E_FILE;
+    }
+    uint32_t texture_id = 0;
+    glGenTextures(1, &texture_id);
+    if (texture_id == 0) {
+        report_error(NAXA_E_INTERNAL);
+        return NAXA_E_INTERNAL;
+    }
+    glBindTexture(GL_TEXTURE_2D, texture_id);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    switch (channels) {
+        case 3:
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, width, height, 0, GL_RGB, GL_UNSIGNED_BYTE, texture_data);
+            break;
+        case 4:
+            glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, width, height, 0, GL_RGBA, GL_UNSIGNED_BYTE, texture_data);
+            break;
+        default:
+            stbi_image_free(texture_data);
+            report_error(NAXA_E_INTERNAL);
+            return NAXA_E_INTERNAL;
+    }
+    stbi_image_free(texture_data);
+
+    // Set up a texture cache slot
+    if (texture_cache_next == NULL) {
+        report_error(NAXA_E_EXHAUSTED);
+        return NAXA_E_EXHAUSTED;
+    }
+    int32_t path_len = strlen(path);
+    char* path_copy = malloc(path_len + 1);
+    memcpy(path_copy, path, path_len + 1);
+    NaxaTexture_t* texture = texture_cache_next;
+    texture_cache_next = texture->next;
+    texture->next = texture_cache_hash_map[hash_bucket];
+    texture_cache_hash_map[hash_bucket] = texture;
+    texture->path = path_copy;
+    texture->refs = 1;
+    texture->texture = texture_id;
+
+    internal_logf(NAXA_SEVERITY_INFO, "Newly loaded texture %s", path);
+    *dest = texture;
+    return NAXA_E_SUCCESS;
+}
+
+int32_t naxa_free_texture(NaxaTexture_t* texture) {
+    if (texture == NULL) {
+        report_error(NAXA_E_NULLPTR);
+        return NAXA_E_NULLPTR;
+    }
+    if (texture < texture_cache || texture >= texture_cache + TEXTURE_CACHE_SIZE) {
+        report_error(NAXA_E_BOUNDS);
+        return NAXA_E_BOUNDS;
+    }
+    texture->refs--;
+    if (texture->refs == 0) {
+        // Remove from path hash table
+        int32_t hash_bucket = hash_code(texture->path) % TEXTURE_CACHE_HASH_SIZE;
+        if (texture_cache_hash_map[hash_bucket] == texture) {
+            texture_cache_hash_map[hash_bucket] = texture->next;
+        } else {
+            NaxaTexture_t* current = texture_cache_hash_map[hash_bucket];
+            while (current) {
+                if (current->next == texture) {
+                    current->next = texture->next;
+                    break;
+                }
+                current = current->next;
+            }
+            if (current == NULL) {
+                // Texture wasn't in the hash map where it should have been
+                report_error(NAXA_E_INTERNAL);
+                return NAXA_E_INTERNAL;
+            }
+        }
+
+        // Add to the available list
+        glDeleteTextures(1, &texture->texture);
+        internal_logf(NAXA_SEVERITY_INFO, "Unloaded texture %s", texture->path);
+        memset(texture, 0, sizeof(NaxaTexture_t));
+        texture->next = texture_cache_next;
+        texture_cache_next = texture;
+    } else if (texture->refs < 0) {
+        report_error(NAXA_E_INTERNAL);
+        return NAXA_E_INTERNAL;
+    }
+    return NAXA_E_SUCCESS;
+}
 
 int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
     if (dest == NULL || path == NULL) {
@@ -27,7 +177,7 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
     }
 
     // We are going to need to extract the directory path first for texture
-    // loads later on since they are specified as relative.
+    // loads later on since they are specified as relative
     int32_t directory_len = strlen(path);
     char* directory = malloc(directory_len + 1);
     memcpy(directory, path, directory_len + 1);
@@ -142,65 +292,14 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
             report_error(NAXA_E_INTERNAL);
             return NAXA_E_INTERNAL;
         }
-        int32_t texture_width;
-        int32_t texture_height;
-        int32_t texture_channels;
+        
         int32_t full_path_len = directory_len + texture_path.length;
         char* full_path = malloc(full_path_len + 1);
         memcpy(full_path, directory, directory_len);
         memcpy(full_path + directory_len, texture_path.data, texture_path.length);
         full_path[full_path_len] = 0;
-        internal_logf(NAXA_SEVERITY_INFO, "Loading texture %s for model %s", full_path, path);
-        stbi_uc* texture_data = stbi_load(full_path, &texture_width, &texture_height, &texture_channels, 0);
-        
-        if (texture_data == NULL) {
-            internal_logf(NAXA_SEVERITY_ERROR, "Failed to load texture %s for model %s", full_path, path);
-            free(submodels);
-            free(vertices);
-            free(elements);
-            free(full_path);
-            free(directory);
-            aiReleaseImport(scene);
-            report_error(NAXA_E_FILE);
-            return NAXA_E_FILE;
-        }
+        naxa_load_texture(&submodels[mesh_idx].diffuse, full_path);
         free(full_path);
-        uint32_t texture = 0;
-        glGenTextures(1, &texture);
-        if (texture == 0) {
-            free(submodels);
-            free(vertices);
-            free(elements);
-            free(directory);
-            aiReleaseImport(scene);
-            stbi_image_free(texture_data);
-            report_error(NAXA_E_INTERNAL);
-            return NAXA_E_INTERNAL;
-        }
-        glBindTexture(GL_TEXTURE_2D, texture);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_REPEAT);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        switch (texture_channels) {
-            case 3:
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGB, texture_width, texture_height, 0, GL_RGB, GL_UNSIGNED_BYTE, texture_data);
-                break;
-            case 4:
-                glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, texture_width, texture_height, 0, GL_RGBA, GL_UNSIGNED_BYTE, texture_data);
-                break;
-            default:
-                free(submodels);
-                free(vertices);
-                free(elements);
-                free(directory);
-                aiReleaseImport(scene);
-                stbi_image_free(texture_data);
-                report_error(NAXA_E_INTERNAL);
-                return NAXA_E_INTERNAL;
-        }
-        stbi_image_free(texture_data);
-        submodels[mesh_idx].diffuse = texture;
     }
     free(directory);
 
@@ -241,7 +340,7 @@ int32_t naxa_free_model(NaxaModel_t* model) {
     glDeleteBuffers(1, &model->vbo);
     glDeleteBuffers(1, &model->ebo);
     for (int32_t i = 0; i < model->submodel_count; i++) {
-        glDeleteTextures(1, &model->submodels[i].diffuse);
+        naxa_free_texture(model->submodels[i].diffuse);
     }
     free(model->submodels);
     free(model);

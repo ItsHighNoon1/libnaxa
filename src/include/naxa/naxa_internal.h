@@ -26,8 +26,12 @@ typedef struct {
 
 extern NaxaGlobals_t naxa_globals;
 
+// Generic functions
+uint32_t hash_code(char* string);
+
 // Graphics functions
 int32_t init_gfx_context(int32_t window_width, int32_t window_height, char* window_name);
+int32_t init_loader_caches();
 int32_t render_all();
 int32_t render_enqueue(NaxaEntity_t* entity);
 

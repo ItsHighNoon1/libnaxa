@@ -53,7 +53,8 @@ extern int32_t naxa_init() {
         return rc;
     }
 
-    // Set up OpenGL loader
+    // Set up OpenGL stuff
+    init_renderer();
     init_loader_caches();
 
     return NAXA_E_SUCCESS;
@@ -69,8 +70,8 @@ extern int32_t naxa_run() {
     entity.position[2] = 0.0f;
 
     while (!glfwWindowShouldClose(naxa_globals.window)) {
-        render_all();
         render_enqueue(&entity);
+        render_all();
         glfwPollEvents();
     }
 

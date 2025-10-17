@@ -44,7 +44,6 @@ typedef struct NaxaModel {
 
 typedef struct {
     vec3 position;
-    int32_t spare;
     vec4 rotation_quat;
     NaxaModel_t* model;
 } NaxaEntity_t;

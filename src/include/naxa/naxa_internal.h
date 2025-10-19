@@ -24,15 +24,22 @@ typedef struct {
     GLFWwindow* window;
 } NaxaGlobals_t;
 
+typedef struct {
+    uint32_t type;
+    char* path;
+} NaxaShaderType_t;
+
 extern NaxaGlobals_t naxa_globals;
 
 // Generic functions
 uint32_t hash_code(char* string);
+char* read_file_into_buffer(FILE* fp, uint32_t* len);
 
 // Graphics functions
 int32_t init_gfx_context(int32_t window_width, int32_t window_height, char* window_name);
 int32_t init_renderer();
 int32_t init_loader_caches();
+int32_t load_shader_program(uint32_t* dest, int32_t stages_len, NaxaShaderType_t* stages);
 int32_t render_all();
 int32_t render_enqueue(NaxaEntity_t* entity);
 

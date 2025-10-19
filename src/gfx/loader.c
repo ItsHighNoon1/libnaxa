@@ -50,6 +50,41 @@ int32_t init_loader_caches() {
     return NAXA_E_SUCCESS;
 }
 
+int32_t load_shader_program(uint32_t* dest, int32_t stages_len, NaxaShaderType_t* stages) {
+    if (dest == NULL || stages == NULL) {
+        report_error(NAXA_E_NULLPTR);
+        return NAXA_E_NULLPTR;
+    }
+    int32_t success;
+    char info_log[512];
+    uint32_t program = glCreateProgram();
+    uint32_t shaders[stages_len];
+    for (int32_t i = 0; i < stages_len; i++) {
+        shaders[i] = glCreateShader(stages[i].type);
+        FILE* fp = fopen(stages[i].path, "r");
+        if (fp == NULL) {
+            report_error(NAXA_E_FILE);
+            return NAXA_E_FILE;
+        }
+        char* source = read_file_into_buffer(fp, NULL);
+        glShaderSource(shaders[i], 1, (const char**)&source, NULL);
+        glCompileShader(shaders[i]);
+        free(source);
+        glGetShaderiv(shaders[i], GL_COMPILE_STATUS, &success);
+        if (success == 0) {
+            glGetShaderInfoLog(shaders[i], sizeof(info_log), NULL, info_log);
+            internal_logf(NAXA_SEVERITY_ERROR, "Failed to compile shader %s:\n%s", stages[i].path, info_log);
+        }
+        glAttachShader(program, shaders[i]);
+    }
+    glLinkProgram(program);
+    for (int32_t i = 0; i < stages_len; i++) {
+        glDeleteShader(shaders[i]);
+    }
+    *dest = program;
+    return NAXA_E_SUCCESS;
+}
+
 int32_t naxa_load_texture(NaxaTexture_t** dest, char* path) {
     if (dest == NULL || path == NULL) {
         report_error(NAXA_E_NULLPTR);
@@ -75,6 +110,7 @@ int32_t naxa_load_texture(NaxaTexture_t** dest, char* path) {
     int32_t width;
     int32_t height;
     int32_t channels;
+    stbi_set_flip_vertically_on_load(1);
     stbi_uc* texture_data = stbi_load(path, &width, &height, &channels, 0);
     if (texture_data == NULL) {
              report_error(NAXA_E_FILE);

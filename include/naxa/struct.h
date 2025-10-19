@@ -1,7 +1,7 @@
 /**
  * @file struct.h
  * @author ItsHighNoon
- * @brief Naxa structures.
+ * @brief Naxa structure definitions for the application.
  * @date 10-09-2025
  * 
  * @copyright Copyright (c) 2025
@@ -17,6 +17,9 @@ extern "C" {
 
 #include <cglm/cglm.h>
 
+/**
+ * @brief A texture in VRAM managed by the Naxa loader.
+ */
 typedef struct NaxaTexture {
     uint32_t texture;
     int32_t refs;
@@ -24,12 +27,18 @@ typedef struct NaxaTexture {
     struct NaxaTexture* next;
 } NaxaTexture_t;
 
+/**
+ * @brief An individually renderable portion of a NaxaModel_t.
+ */
 typedef struct {
     int32_t vertex_count;
     int32_t offset;
     NaxaTexture_t* diffuse;
 } NaxaSubmodel_t;
 
+/**
+ * @brief A vertex buffer in VRAM managed by the Naxa loader.
+ */
 typedef struct NaxaModel {
     uint32_t vao;
     uint32_t vbo;
@@ -42,6 +51,9 @@ typedef struct NaxaModel {
     // skeleton_t
 } NaxaModel_t;
 
+/**
+ * @brief An object that exists in the game world.
+ */
 typedef struct {
     vec3 position;
     vec4 rotation_quat;

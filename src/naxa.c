@@ -66,8 +66,8 @@ extern int32_t naxa_run() {
     NaxaEntity_t entity;
     naxa_load_model(&entity.model, "res/anaxa/model.pmx");
     entity.position[0] = 0.0f;
-    entity.position[1] = 0.0f;
-    entity.position[2] = 0.0f;
+    entity.position[1] = -10.0f;
+    entity.position[2] = -20.0f;
 
     while (!glfwWindowShouldClose(naxa_globals.window)) {
         render_enqueue(&entity);

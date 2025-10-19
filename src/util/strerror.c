@@ -8,6 +8,7 @@ static const char* STRERROR_TABLE[] = {
     [NAXA_E_TOOLONG] =      "String too long",
     [NAXA_E_FILE] =         "File error",
     [NAXA_E_NULLPTR] =      "Unexpected null pointer",
+    [NAXA_E_COMPILE] =      "Compile error",
 };
 
 const char* naxa_strerror(int32_t error) {

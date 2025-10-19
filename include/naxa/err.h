@@ -22,6 +22,7 @@ extern "C" {
 #define NAXA_E_TOOLONG 4
 #define NAXA_E_FILE 5
 #define NAXA_E_NULLPTR 6
+#define NAXA_E_COMPILE 7
 
 /**
  * @brief Naxa version of strerror.

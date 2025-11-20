@@ -22,6 +22,8 @@ typedef struct {
 
     // GLFW context which is shared between graphics and input
     GLFWwindow* window;
+    int window_width;
+    int window_height;
 } NaxaGlobals_t;
 
 typedef struct {

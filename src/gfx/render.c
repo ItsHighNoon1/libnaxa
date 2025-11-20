@@ -1,3 +1,5 @@
+#include <string.h>
+
 #include <cglm/mat4.h>
 #include <glad/glad.h>
 #include <GLFW/glfw3.h>
@@ -6,6 +8,8 @@
 #include <naxa/gfx.h>
 #include <naxa/log.h>
 #include <naxa/naxa_internal.h>
+
+#define MAX_BONES 200
 
 typedef struct {
     NaxaModel_t* model;
@@ -18,7 +22,9 @@ int32_t render_queue_size;
 Renderable_t* render_queue;
 
 uint32_t basic_shader;
+int32_t basic_shader_u_model;
 int32_t basic_shader_u_mvp;
+int32_t basic_shader_u_skeleton;
 
 static int32_t compare_renderables(const void* a, const void* b) {
     Renderable_t* left = (Renderable_t*)a;
@@ -40,7 +46,9 @@ int32_t init_renderer() {
         { GL_FRAGMENT_SHADER, "res/basic.frag" }
     };
     load_shader_program(&basic_shader, sizeof(basic_shader_stages) / sizeof(NaxaShaderType_t), basic_shader_stages);
+    basic_shader_u_model = glGetUniformLocation(basic_shader, "u_model");
     basic_shader_u_mvp = glGetUniformLocation(basic_shader, "u_mvp");
+    basic_shader_u_skeleton = glGetUniformLocation(basic_shader, "u_skeleton");
 
     glClearColor(0.5f, 0.0f, 0.5f, 1.0f);
     glEnable(GL_DEPTH_TEST);
@@ -54,8 +62,7 @@ int32_t render_all() {
     glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     mat4 vp_matrix;
-    // TODO dynamic aspect ratio
-    glm_perspective(glm_rad(90.0f), 1.0f, 0.1f, 100.0f, vp_matrix);
+    glm_perspective(glm_rad(90.0f), (float)naxa_globals.window_width / (float)naxa_globals.window_height, 0.1f, 100.0f, vp_matrix);
 
     glUseProgram(basic_shader);
     uint32_t last_vao = 0;
@@ -64,6 +71,7 @@ int32_t render_all() {
         mat4 model_matrix;
         glm_translate_make(model_matrix, render_queue[i].position);
         glm_quat_rotate(model_matrix, render_queue[i].rotation_quat, model_matrix);
+        glUniformMatrix4fv(basic_shader_u_model, 1, GL_FALSE, model_matrix[0]);
         mat4 mvp_matrix;
         glm_mat4_mul(vp_matrix, model_matrix, mvp_matrix);
         glUniformMatrix4fv(basic_shader_u_mvp, 1, GL_FALSE, mvp_matrix[0]);
@@ -71,6 +79,18 @@ int32_t render_all() {
             last_vao = render_queue[i].model->vao;
             glBindVertexArray(last_vao);
         }
+        mat4 skeleton[MAX_BONES];
+        // TODO
+        int32_t bones_limit = MAX_BONES;
+        if (render_queue[i].model->bone_count < bones_limit) {
+            bones_limit = render_queue[i].model->bone_count;
+        }
+        for (int32_t j = 0; j < bones_limit; j++) {
+            memcpy(skeleton[j], render_queue[i].model->bones[j].matrix, sizeof(mat4));
+            glm_mat4_identity(render_queue[i].model->bones[j].matrix);
+            //glm_rotate_x(render_queue[i].model->bones[j].matrix, 0.1f, render_queue[i].model->bones[j].matrix);
+        }
+        glUniformMatrix4fv(basic_shader_u_skeleton, bones_limit, GL_FALSE, skeleton[0][0]);
         for (int32_t j = 0; j < render_queue[i].model->submodel_count; j++) {
             NaxaSubmodel_t* submodel = &render_queue[i].model->submodels[j];
             if (submodel->diffuse->texture != last_texture) {

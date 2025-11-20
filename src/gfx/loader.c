@@ -18,11 +18,14 @@
 #define TEXTURE_CACHE_SIZE 512
 #define MODEL_CACHE_HASH_SIZE 16
 #define TEXTURE_CACHE_HASH_SIZE 16
+#define MAX_BONE_WEIGHTS 4
 
 typedef struct {
     vec3 position;
     vec2 texture;
     vec3 normal;
+    ivec4 bone_ids;
+    vec4 bone_weights;
 } VertexData_t;
 
 NaxaModel_t* model_cache_next;
@@ -78,6 +81,11 @@ int32_t load_shader_program(uint32_t* dest, int32_t stages_len, NaxaShaderType_t
         glAttachShader(program, shaders[i]);
     }
     glLinkProgram(program);
+    glGetProgramiv(program, GL_LINK_STATUS, &success);
+    if (success == 0) {
+        glGetProgramInfoLog(program, sizeof(info_log), NULL, info_log);
+        internal_logf(NAXA_SEVERITY_ERROR, "Failed to link shader:\n%s", info_log);
+    }
     for (int32_t i = 0; i < stages_len; i++) {
         glDeleteShader(shaders[i]);
     }
@@ -119,6 +127,7 @@ int32_t naxa_load_texture(NaxaTexture_t** dest, char* path) {
     uint32_t texture_id = 0;
     glGenTextures(1, &texture_id);
     if (texture_id == 0) {
+        stbi_image_free(texture_data);
         report_error(NAXA_E_INTERNAL);
         return NAXA_E_INTERNAL;
     }
@@ -240,6 +249,7 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
         aiProcess_SortByPType
     );
     if (scene == NULL) {
+        free(directory);
         report_error(NAXA_E_FILE);
         return NAXA_E_FILE;
     }
@@ -290,40 +300,92 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
 
     // Load all submodels
     NaxaSubmodel_t* submodels = malloc(sizeof(NaxaSubmodel_t) * scene->mNumMeshes);
+    int32_t unique_bones = 0;
+    int32_t bones_size = 10;
+    NaxaBone_t* bones = malloc(bones_size * sizeof(NaxaBone_t));
     int32_t vertex_buffer_size = total_vertices * sizeof(VertexData_t);
     int32_t element_buffer_size = total_faces * 3 * sizeof(int32_t);
     int32_t vertex_offset = 0;
     int32_t element_offset = 0;
     VertexData_t* vertices = malloc(vertex_buffer_size);
+    for (int32_t v_idx = 0; v_idx < total_vertices; v_idx++) {
+        for (int32_t bone_id_idx = 0; bone_id_idx < MAX_BONE_WEIGHTS; bone_id_idx++) {
+            vertices[v_idx].bone_ids[bone_id_idx] = -1;
+        }
+    }
     uint32_t* elements = malloc(element_buffer_size);
     for (int32_t mesh_idx = 0; mesh_idx < scene->mNumMeshes; mesh_idx++) {
+        struct aiMesh* mesh = scene->mMeshes[mesh_idx];
+
         // Copy vertex and index data into the big buffers
-        for (int32_t v_idx = 0; v_idx < scene->mMeshes[mesh_idx]->mNumVertices; v_idx++) {
-            vertices[v_idx + vertex_offset].position[0] = scene->mMeshes[mesh_idx]->mVertices[v_idx].x;
-            vertices[v_idx + vertex_offset].position[1] = scene->mMeshes[mesh_idx]->mVertices[v_idx].y;
-            vertices[v_idx + vertex_offset].position[2] = scene->mMeshes[mesh_idx]->mVertices[v_idx].z;
-            vertices[v_idx + vertex_offset].texture[0] = scene->mMeshes[mesh_idx]->mTextureCoords[0][v_idx].x;
-            vertices[v_idx + vertex_offset].texture[1] = scene->mMeshes[mesh_idx]->mTextureCoords[0][v_idx].y;
-            vertices[v_idx + vertex_offset].normal[0] = scene->mMeshes[mesh_idx]->mNormals[v_idx].x;
-            vertices[v_idx + vertex_offset].normal[1] = scene->mMeshes[mesh_idx]->mNormals[v_idx].y;
-            vertices[v_idx + vertex_offset].normal[2] = scene->mMeshes[mesh_idx]->mNormals[v_idx].z;
+        for (int32_t v_idx = 0; v_idx < mesh->mNumVertices; v_idx++) {
+            vertices[v_idx + vertex_offset].position[0] = mesh->mVertices[v_idx].x;
+            vertices[v_idx + vertex_offset].position[1] = mesh->mVertices[v_idx].y;
+            vertices[v_idx + vertex_offset].position[2] = mesh->mVertices[v_idx].z;
+            vertices[v_idx + vertex_offset].texture[0] = mesh->mTextureCoords[0][v_idx].x;
+            vertices[v_idx + vertex_offset].texture[1] = mesh->mTextureCoords[0][v_idx].y;
+            vertices[v_idx + vertex_offset].normal[0] = mesh->mNormals[v_idx].x;
+            vertices[v_idx + vertex_offset].normal[1] = mesh->mNormals[v_idx].y;
+            vertices[v_idx + vertex_offset].normal[2] = mesh->mNormals[v_idx].z;
         }
-        for (int32_t e_idx = 0; e_idx < scene->mMeshes[mesh_idx]->mNumFaces; e_idx++) {
-            elements[e_idx * 3 + 0 + element_offset] = scene->mMeshes[mesh_idx]->mFaces[e_idx].mIndices[0] + vertex_offset;
-            elements[e_idx * 3 + 1 + element_offset] = scene->mMeshes[mesh_idx]->mFaces[e_idx].mIndices[1] + vertex_offset;
-            elements[e_idx * 3 + 2 + element_offset] = scene->mMeshes[mesh_idx]->mFaces[e_idx].mIndices[2] + vertex_offset;
+        for (int32_t e_idx = 0; e_idx < mesh->mNumFaces; e_idx++) {
+            elements[e_idx * 3 + 0 + element_offset] = mesh->mFaces[e_idx].mIndices[0] + vertex_offset;
+            elements[e_idx * 3 + 1 + element_offset] = mesh->mFaces[e_idx].mIndices[1] + vertex_offset;
+            elements[e_idx * 3 + 2 + element_offset] = mesh->mFaces[e_idx].mIndices[2] + vertex_offset;
         }
-        submodels[mesh_idx].vertex_count = scene->mMeshes[mesh_idx]->mNumFaces * 3;
+        submodels[mesh_idx].vertex_count = mesh->mNumFaces * 3;
         submodels[mesh_idx].offset = element_offset * sizeof(uint32_t);
-        vertex_offset += scene->mMeshes[mesh_idx]->mNumVertices;
-        element_offset += scene->mMeshes[mesh_idx]->mNumFaces * 3;
+        
+        // Load bone data
+        for (int32_t bone_idx = 0; bone_idx < mesh->mNumBones; bone_idx++) {
+            int32_t bone_id = -1;
+            for (int32_t established_bone_idx = 0; established_bone_idx < unique_bones; established_bone_idx++) {
+                if (strncmp(mesh->mBones[bone_idx]->mName.data, bones[established_bone_idx].name, mesh->mBones[bone_idx]->mName.length) == 0) {
+                    bone_id = established_bone_idx;
+                    break;
+                }
+            }
+            if (bone_id == -1) {
+                if (unique_bones >= bones_size) {
+                    bones_size *= 2;
+                    bones =  realloc(bones, bones_size * sizeof(NaxaBone_t));
+                }
+                bone_id = unique_bones;
+                bones[unique_bones].index = unique_bones;
+                bones[unique_bones].name = malloc(mesh->mBones[bone_idx]->mName.length + 1);
+                strncpy(bones[unique_bones].name, mesh->mBones[bone_idx]->mName.data, mesh->mBones[bone_idx]->mName.length);
+                bones[unique_bones].name[mesh->mBones[bone_idx]->mName.length] = '\0';
+                memcpy(bones[unique_bones].matrix, &mesh->mBones[bone_idx]->mOffsetMatrix, sizeof(mat4));
+                unique_bones++;
+            }
+            for (int32_t weight_idx = 0; weight_idx < mesh->mBones[bone_idx]->mNumWeights; weight_idx++) {
+                struct aiVertexWeight* weight_data = &mesh->mBones[bone_idx]->mWeights[weight_idx];
+                for (int32_t bone_id_idx = 0; bone_id_idx < MAX_BONE_WEIGHTS; bone_id_idx++) {
+                    if (vertices[vertex_offset + weight_data->mVertexId].bone_ids[bone_id_idx] == -1) {
+                        vertices[vertex_offset + weight_data->mVertexId].bone_ids[bone_id_idx] = bone_id;
+                        vertices[vertex_offset + weight_data->mVertexId].bone_weights[bone_id_idx] = weight_data->mWeight;
+                        break;
+                    }
+                }
+            }
+        }
+
+        vertex_offset += mesh->mNumVertices;
+        element_offset += mesh->mNumFaces * 3;
 
         // Load the texture for this model
-        struct aiMaterial* material = scene->mMaterials[scene->mMeshes[mesh_idx]->mMaterialIndex];
+        struct aiMaterial* material = scene->mMaterials[mesh->mMaterialIndex];
         struct aiString texture_path;
         aiReturn ai_rc = aiGetMaterialTexture(material, aiTextureType_DIFFUSE, 0, &texture_path, NULL, NULL, NULL, NULL, NULL, NULL);
         if (ai_rc != aiReturn_SUCCESS) {
             free(directory);
+            for (int32_t bone_idx = 0; bone_idx < unique_bones; bone_idx++) {
+                free(bones[bone_idx].name);
+            }
+            free(bones);
+            free(vertices);
+            free(elements);
+            free(submodels);
             aiReleaseImport(scene);
             report_error(NAXA_E_INTERNAL);
             return NAXA_E_INTERNAL;
@@ -338,6 +400,27 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
         free(full_path);
     }
     free(directory);
+    bones = realloc(bones, unique_bones * sizeof(NaxaBone_t));
+
+    // Normalize bone weights in case something was influenced by more than 4 bones
+    for (int32_t v_idx = 0; v_idx < total_vertices; v_idx++) {
+        int32_t n_bones = 0;
+        float total_weight = 0.0f;
+        for (int32_t bone_weight_idx = 0; bone_weight_idx < MAX_BONE_WEIGHTS; bone_weight_idx++) {
+            if (vertices[v_idx].bone_ids[bone_weight_idx] != -1) {
+                n_bones++;
+                total_weight += vertices[v_idx].bone_weights[bone_weight_idx];
+            }
+        }
+        if (total_weight < 0.5f) {
+            internal_logf(NAXA_SEVERITY_WARN, "Vertex %d has low bone weight %f from %d bones", v_idx, total_weight, n_bones);
+        }
+        for (int32_t bone_weight_idx = 0; bone_weight_idx < MAX_BONE_WEIGHTS; bone_weight_idx++) {
+            if (vertices[v_idx].bone_ids[bone_weight_idx] != -1) {
+                vertices[v_idx].bone_weights[bone_weight_idx] /= total_weight;
+            }
+        }
+    }
 
     // Load vertex data into VAO
     glBindVertexArray(vao);
@@ -348,9 +431,13 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
     glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, sizeof(VertexData_t), (void*)offsetof(VertexData_t, position));
     glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, sizeof(VertexData_t), (void*)offsetof(VertexData_t, texture));
     glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, sizeof(VertexData_t), (void*)offsetof(VertexData_t, normal));
+    glVertexAttribPointer(3, 4, GL_INT, GL_FALSE, sizeof(VertexData_t), (void*)offsetof(VertexData_t, bone_ids));
+    glVertexAttribPointer(4, 4, GL_FLOAT, GL_FALSE, sizeof(VertexData_t), (void*)offsetof(VertexData_t, bone_weights));
     glEnableVertexAttribArray(0);
     glEnableVertexAttribArray(1);
     glEnableVertexAttribArray(2);
+    glEnableVertexAttribArray(3);
+    glEnableVertexAttribArray(4);
     glBindVertexArray(0);
     free(vertices);
     free(elements);
@@ -363,6 +450,8 @@ int32_t naxa_load_model(NaxaModel_t** dest, char* path) {
     model->ebo = ebo;
     model->submodel_count = scene->mNumMeshes;
     model->submodels = submodels;
+    model->bone_count = unique_bones;
+    model->bones = bones;
     *dest = model;
     aiReleaseImport(scene);
     return NAXA_E_SUCCESS;

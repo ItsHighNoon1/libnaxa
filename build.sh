@@ -42,7 +42,6 @@ echo "Linking"
 mkdir -p lib
 $CC -lassimp -lglfw $(IFS=$'\n'; echo "${flags[*]}") -shared -o "lib/libnaxa.so.$VERSION" $(IFS=$'\n'; echo "${object_files[*]}")
 ln -nsf libnaxa.so.$VERSION lib/libnaxa.so
-
 echo "Done building library"
 
 # Compile the test program
@@ -62,3 +61,20 @@ for source in "${source_files[@]}"; do
 done
 wait
 $CC -Llib -lnaxa $(IFS=$'\n'; echo "${flags[*]}") -o "test/test" $(IFS=$'\n'; echo "${object_files[*]}")
+
+# Do static analysis after the executable is done
+echo "Build done, doing static analysis"
+mkdir -p analysis
+source_files=()
+while IFS= read -r line; do
+    source_files+=("${line#src/}")
+done < <(find "src" -type f -name "*.c")
+for source in "${source_files[@]}"; do
+    plist="analysis/${source%.*}.plist"
+    echo "Analyzing $source"
+    dir="${plist%/*}"
+    mkdir -p $dir
+    $CC --analyze "src/$source" $(IFS=$'\n'; echo "${flags[*]}") -o $plist
+done
+wait
+echo "Static analysis done"

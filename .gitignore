@@ -2,6 +2,7 @@
 doc/
 lib/
 obj/
+analysis/
 
 # My tooling
 .vscode/

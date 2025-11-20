@@ -37,6 +37,15 @@ typedef struct {
 } NaxaSubmodel_t;
 
 /**
+ * @brief A bone that is part of the skeleton of a NaxaModel_t.
+ */
+typedef struct {
+    char* name;
+    int32_t index;
+    mat4 matrix;
+} NaxaBone_t;
+
+/**
  * @brief A vertex buffer in VRAM managed by the Naxa loader.
  */
 typedef struct NaxaModel {
@@ -45,6 +54,8 @@ typedef struct NaxaModel {
     uint32_t ebo;
     int32_t submodel_count;
     NaxaSubmodel_t* submodels;
+    int32_t bone_count;
+    NaxaBone_t* bones;
     int32_t refs;
     char* path;
     struct NaxaModel* next;    
